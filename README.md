@@ -1,5 +1,5 @@
 ## ROS2X — ROS 2 Development Toolbox
-```console
+```
         ____  ____  ________  _  __
        / __ \/ __ \/ ___/__ \| |/ /
       / /_/ / / / /\__ \__/ /|   / 
@@ -38,7 +38,7 @@
 - Working X11 on the host (the script handles `xhost +local:` automatically)
 
 ## Quick Start
-```console
+```
 ❯ ./ROS2X --help
 ----- [ ROS2X Usage ] -----------------------
 |   build           - Build the ROS workspace
