@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# Get the directory of the script
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd $DIR
+
+# Open Xhost
+xhost +local: > /dev/null 2>&1
+
+cd ./docker
+
+# Environment variables
+export LAUNCH_COMMAND="echo '[TO-DO] Set LAUNCH_COMMAND in ROS2X'"
+export ROS_DISTRO=${ROS_DISTRO:-humble}
+export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:=100}
+export PROJECT_NAME=${PROJECT_NAME:-ros2x}
+export INSTALL_MICRO_ROS=${INSTALL_MICRO_ROS:-true}
+
+# Create or overwrite the .env file with static settings
+# Overwrite the .env file with the desired content
+cat <<EOL > .env
+# Docker Compose Settings
+COMPOSE_PROJECT_NAME=${PROJECT_NAME}
+COMPOSE_BAKE=true
+
+# ROS Settings
+ROS_DISTRO=${ROS_DISTRO}
+ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+
+# Project Settings
+PROJECT_NAME=${PROJECT_NAME}
+AUTO_BUILD=${AUTO_BUILD}
+AUTO_RUN=${AUTO_RUN}
+LAUNCH_COMMAND=${LAUNCH_COMMAND}
+INSTALL_MICRO_ROS=${INSTALL_MICRO_ROS}
+
+# Dynamic UID and GID
+LOCAL_USER_ID=$(id -u)
+LOCAL_GROUP_ID=$(id -g)
+EOL
+
+# Ensure cleanup on script exit
+cleanup() {
+    if [[ "$ACTION" != "close" && "$ACTION" != "build" && "$ACTION" != "run" && "$ACTION" != "groot" ]]; then
+        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
+            echo "Container is still running. Use 'close' to stop it."
+        fi
+    elif [[ "$ACTION" == "close" ]]; then
+        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
+            docker compose down
+        fi
+    fi
+    xhost -local: > /dev/null 2>&1
+}
+trap cleanup EXIT
+
+# Argument handling
+ACTION=${1:-}
+CUSTOM_COMMAND=${2:-}
+
+print_usage() {
+    echo -e "\033[1;32m----- [ ROS2X Usage ] -----------------------\033[0m"
+    echo -e "\033[1;32m|\033[0m   build           - Build the ROS workspace"
+    echo -e "\033[1;32m|\033[0m   run             - Run the main program"
+    echo -e "\033[1;32m|\033[0m   groot           - Launch Groot2"
+    echo -e "\033[1;32m|\033[0m   enter           - Enter the container"
+    echo -e "\033[1;32m|\033[0m   close           - Stop the container"
+    echo -e "\033[1;32m|\033[0m   config          - Show current configuration"
+    echo -e "\033[1;32m|\033[0m   --command <cmd> - Run a custom command"
+    echo -e "\033[1;32m|\033[0m   --help          - Show this help message"
+    echo -e "\033[1;32m---------------------------------------------\033[0m"
+}
+
+show_config() {
+    echo -e "\033[1;36m----- [ ROS2X Configuration ] ---------------\033[0m"
+    echo -e "\033[1;36m|\033[0m   Project Name      : ${PROJECT_NAME}"
+    echo -e "\033[1;36m|\033[0m   ROS Distribution  : ${ROS_DISTRO}"
+    echo -e "\033[1;36m|\033[0m   ROS Domain ID     : ${ROS_DOMAIN_ID}"
+    echo -e "\033[1;36m|\033[0m   Launch Command    : ${LAUNCH_COMMAND:-Not set}"
+    echo -e "\033[1;36m|\033[0m   Install micro-ROS : ${INSTALL_MICRO_ROS}"
+    echo -e "\033[1;36m|\033[0m   User ID           : $(id -u)"
+    echo -e "\033[1;36m|\033[0m   Group ID          : $(id -g)"
+    echo -e "\033[1;36m---------------------------------------------\033[0m"
+}
+
+if [[ "$ACTION" == "config" ]]; then
+    show_config
+    exit 0
+fi
+
+if [[ "$ACTION" == "--help" || "$ACTION" == "-h" ]]; then
+    print_usage
+    exit 0
+fi
+
+if [[ "$ACTION" == "--command" ]]; then
+    if [[ -z "$CUSTOM_COMMAND" ]]; then
+        echo "Error: No command specified for --command."
+        exit 1
+    fi
+    if ! docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        docker compose up -d
+    fi
+    docker compose exec ros2x bash -c "$CUSTOM_COMMAND"
+    exit 0
+fi
+
+case $ACTION in
+    build)
+        export AUTO_BUILD=true AUTO_RUN=false
+        echo "Building ROS workspace..."
+        docker compose up
+        ;;
+    run)
+        export AUTO_BUILD=false AUTO_RUN=true
+        echo "Running the container..."
+        docker compose up
+        docker compose down
+        ;;
+    groot)
+        export AUTO_BUILD=false AUTO_RUN=false
+        echo "Launching Groot..."
+        docker compose up -d
+        docker compose exec --user ros ros2x bash -lc '
+            if [ ! -f "/home/ros/workspace/groot/groot.AppImage" ]; then
+                bash "/home/ros/workspace/groot/install_groot2.sh"
+            fi
+            exec "/home/ros/workspace/groot/groot.AppImage"
+        '
+        echo "Groot process exited. Stopping the container..."
+        docker compose down
+        ;;
+    enter)
+        export AUTO_BUILD=false AUTO_RUN=false
+        echo "Entering the container..."
+        if ! docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
+            echo -e "Container '${PROJECT_NAME}' is not running.\nStarting without build or run..."
+            docker compose up -d
+        fi
+        docker exec -it --user ros ${PROJECT_NAME} bash || echo "Exited container without shutting it down."
+        ;;
+    close)
+        export AUTO_BUILD=false AUTO_RUN=false
+        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}" || \
+           docker ps --filter "name=${PROJECT_NAME}" --filter "status=exited" | grep -q "${PROJECT_NAME}"; then
+            echo "Stopping the container..."
+            docker compose down
+        else
+            echo "Container is already stopped."
+        fi
+        ;;
+    *)
+        print_usage
+        exit 1
+        ;;
+esac

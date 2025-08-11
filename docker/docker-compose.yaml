@@ -1,0 +1,50 @@
+services:
+  ros2x:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+      args:
+        ROS_DISTRO: ${ROS_DISTRO}
+        USERNAME: ros
+    image: scx/ros2x:${ROS_DISTRO}
+    container_name: ${PROJECT_NAME:-ros2x}
+    stdin_open: true
+    tty: true
+    privileged: true
+    network_mode: "host"
+
+    working_dir: /home/ros
+
+    environment:
+      - PROJECT_NAME=${PROJECT_NAME:-ros2x}
+      - ROS_WS=/home/ros/workspace
+
+      - AUTO_BUILD=${AUTO_BUILD}
+      - AUTO_RUN=${AUTO_RUN}
+      - LOCAL_USER_ID=${LOCAL_USER_ID}
+      - LOCAL_GROUP_ID=${LOCAL_GROUP_ID}
+      - LAUNCH_COMMAND=${LAUNCH_COMMAND}
+      
+      - DISPLAY=${DISPLAY}
+      - GROOT_APPIMAGE=/home/ros/workspace/groot/groot.AppImage
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    
+    volumes:
+      # Mount app resources into container.
+      - ../:/home/ros/workspace
+
+      # Mount local timezone into container.
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      # Mount X11 server
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      
+      # Direct Rendering Infrastructure
+      - /dev:/dev
+
+    stop_grace_period: 1s
+
+    entrypoint: ["/entrypoint.sh"]
+    command: ["${CUSTOM_COMMAND:-/bin/bash}"]

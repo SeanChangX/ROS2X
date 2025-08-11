@@ -1,0 +1,23 @@
+# Ignore the vscode directory
+**/.vscode/
+
+# Ignore the build directory
+**/build/
+**/install/
+**/log/
+**/bag/
+
+# Ignore python cache files
+**/__pycache__/
+
+# Ignore docker compose env files
+**/.env
+
+# Ignore mirco-ROS files
+**/src/micro_ros/
+**/src/uros/
+**/ros2.repos
+
+# Other pecific files or directories
+*.AppImage
+**/Backups/
