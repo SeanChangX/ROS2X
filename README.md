@@ -1,4 +1,4 @@
-## ROS2X — ROS 2 Development Toolbox
+## ROS2X - ROS 2 Development Toolbox
 ```
         ____  ____  ________  _  __
        / __ \/ __ \/ ___/__ \| |/ /
