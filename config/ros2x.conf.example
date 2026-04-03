@@ -1,0 +1,23 @@
+# ROS2X persistent configuration
+# This file is read by ./ROS2X.
+# Environment variables passed inline still have higher priority.
+#
+# Example:
+#   ROS_DOMAIN_ID=12
+#   IMAGE_STRATEGY=build
+
+ROS_DISTRO=humble
+ROS_INSTALL_TYPE=ros-base
+ROS_DOMAIN_ID=0
+PROJECT_NAME=ros2x
+INSTALL_MICRO_ROS=false
+LAUNCH_COMMAND=echo '[TO-DO] Set LAUNCH_COMMAND in ROS2X'
+# Leave empty to auto-generate: ghcr.io/seanchangx/ros2x:<ROS_DISTRO>-<flavor>
+IMAGE_NAME=
+IMAGE_STRATEGY=auto
+GROOT_VERSION=1.9.0
+GROOT_FALLBACK_VERSIONS=1.8.1,1.8.0,1.7.1,1.7.0,1.6.1
+GROOT_APPIMAGE_URL=
+GROOT_SHA256=
+FOXGLOVE_PORT=8765
+FOXGLOVE_ADDRESS=0.0.0.0

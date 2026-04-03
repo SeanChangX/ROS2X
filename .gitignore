@@ -1,23 +1,26 @@
-# Ignore the vscode directory
+# Editor settings
 **/.vscode/
 
-# Ignore the build directory
+# Build artifacts
 **/build/
 **/install/
 **/log/
 **/bag/
 
-# Ignore python cache files
+# Python cache files
 **/__pycache__/
 
-# Ignore docker compose env files
+# Local runtime config/state
 **/.env
+config/ros2x.conf
 
-# Ignore mirco-ROS files
-**/src/micro_ros/
+# Auto-generated micro-ROS workspace content
+**/src/micro_ros_setup/
 **/src/uros/
-**/ros2.repos
+**/src/ros2.repos
+**/.micro_ros_bootstrap.lock
+**/.micro_ros_bootstrapped_*
 
-# Other pecific files or directories
+# Other generated files
 *.AppImage
 **/Backups/

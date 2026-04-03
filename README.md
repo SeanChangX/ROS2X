@@ -1,114 +1,187 @@
-## ROS2X - ROS 2 Development Toolbox
-```
-        ____  ____  ________  _  __
-       / __ \/ __ \/ ___/__ \| |/ /
-      / /_/ / / / /\__ \__/ /|   / 
-     / _, _/ /_/ /___/ / __//   |  
-    /_/ |_|\____//____/____/_/|_|  
-                               
-[ ROS2X is an all-in-one Docker toolbox for ROS 2 development ]
-```
+# ROS2X
 
-### Key Features
-- **Reproducible dev environment**: Docker image based on `osrf/ros:<distro>-desktop`
-- **Host user mapping**: Files written in the container are owned by your host user
-- **X11 GUI support**: Run RViz and other GUI apps from inside the container
-- **micro-ROS**: Auto-clone and build micro-ROS workspace
-- **Groot2 integration**: One command to download and run Groot2 AppImage
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![ROS 2](https://img.shields.io/badge/ROS%202-Humble%20(default)-22314E.svg)](https://docs.ros.org/en/humble/index.html)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://docs.docker.com/compose/)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20aarch64-6f42c1.svg)](#compatibility)
+[![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25.svg)](ROS2X)
 
-## Repository Layout
-```
-[ ROS2X ]
-├── ROS2X                        # Main script
-├── docker
-│   ├── Dockerfile               # Multi-stage image with base tools and entrypoint
-│   ├── docker-compose.yaml      # Container config (host networking, volumes, X11)
-│   └── entrypoint.sh            # UID/GID mapping, micro-ROS install, build/run hooks
-├── src                          # ROS 2 workspace source (mounted to /home/ros/workspace)
-│   └── micro_ros/               # (optional) micro-ROS setup
-├── groot
-│   └── install_groot2.sh        # Downloads Groot2 AppImage on demand
-└── scripts
-    └── install_ros2_humble.sh   # Native install helper (Ubuntu 22.04)
+ROS2X is a Docker-first ROS 2 development toolbox focused on reproducible,
+robotics-friendly workflows. It provides one entrypoint script for image build,
+workspace build, launch/run, micro-ROS bootstrap, Foxglove Bridge, and Groot2.
 
-```
+## Highlights
 
-## Prerequisites
-- Linux with Docker Engine and Docker Compose v2
-- Working X11 on the host (the script handles `xhost +local:` automatically)
+- Ubuntu 22.04 base image (`docker/Dockerfile`)
+- Host UID/GID mapping for correct file ownership
+- X11 GUI support for RViz and AppImage tools
+- Integrated micro-ROS bootstrap flow (`scripts/install_micro_ros.sh`)
+- Groot2 AppImage launcher (`./ROS2X app groot`)
+- Foxglove Bridge launcher (`./ROS2X bridge`)
+- Persistent project config via `config/ros2x.conf`
 
 ## Quick Start
-```
-❯ ./ROS2X --help
------ [ ROS2X Usage ] -----------------------
-|   build           - Build the ROS workspace
-|   run             - Run the main program
-|   groot           - Launch Groot2
-|   enter           - Enter the container
-|   close           - Stop the container
-|   config          - Show current configuration
-|   --command <cmd> - Run a custom command
-|   --help          - Show this help message
----------------------------------------------
-```
-
-## Common Workflows
-- **Develop**: put your ROS 2 packages under `src/`, then build with `./ROS2X build`.
-- **Iterate inside container**: `./ROS2X enter`, then use `colcon build --symlink-install`.
-- **Run GUI tools**: RViz and other GUI apps are supported via X11 mapping.
-- **Use Groot2**: download and run the AppImage automatically:
 
 ```bash
-./ROS2X groot
+./ROS2X --help
+./ROS2X config init
+./ROS2X build
+./ROS2X enter
 ```
+
+## Command Reference
+
+| Command | Purpose |
+|---|---|
+| `./ROS2X build` | Build workspace in container (`colcon build --symlink-install`) |
+| `./ROS2X run` | Run `LAUNCH_COMMAND` (auto-build if workspace not ready) |
+| `./ROS2X bridge` | Run Foxglove Bridge |
+| `./ROS2X app groot` | Launch Groot2 AppImage |
+| `./ROS2X enter` | Enter running container shell |
+| `./ROS2X --command "<cmd>"` | Execute one command in container |
+| `./ROS2X image-build` | Build/update Docker image only |
+| `./ROS2X close` | Stop container |
+| `./ROS2X config ...` | Show or manage persistent config |
 
 ## Configuration
-Run the following to see current settings:
+
+`./ROS2X` writes `docker/.env` on every invocation.
+Do not edit `docker/.env` directly.
+
+Recommended ways to configure values:
+
+1. One-off command:
+   `ROS_DISTRO=humble ROS_INSTALL_TYPE=desktop ./ROS2X build`
+2. Persistent project defaults:
+   `./ROS2X config set <KEY> <VALUE>`
+
+Precedence order:
+`inline env vars > config/ros2x.conf > script defaults`
+
+Useful config commands:
 
 ```bash
-./ROS2X config
+./ROS2X config init
+./ROS2X config list
+./ROS2X config keys
+./ROS2X config get ROS_DISTRO
+./ROS2X config set INSTALL_MICRO_ROS true
+./ROS2X config unset GROOT_SHA256
 ```
 
-You can customize these variables. The script writes `docker/.env` on each run.
+Main keys:
 
-- `ROS_DISTRO` (default: `humble`): ROS 2 distribution
-- `ROS_DOMAIN_ID` (default: `100`): DDS domain isolation
-- `PROJECT_NAME` (default: `ros2x`): container name
-- `INSTALL_MICRO_ROS` (default: `true`): auto-install micro-ROS into `src/micro_ros`
-- `LAUNCH_COMMAND`: command evaluated when using `./ROS2X run`
+- `ROS_DISTRO` (default: `humble`)
+- `ROS_INSTALL_TYPE` (`ros-base|desktop|development`, default: `ros-base`)
+- `ROS_DOMAIN_ID` (default: `0`)
+- `PROJECT_NAME` (default: `ros2x`)
+- `INSTALL_MICRO_ROS` (default: `false`)
+- `LAUNCH_COMMAND`
+- `IMAGE_NAME` (default: `ghcr.io/seanchangx/ros2x:${ROS_DISTRO}-<flavor>`)
+  - flavor mapping: `ros-base -> base`, `desktop -> desktop`, `development -> dev`
+- `IMAGE_STRATEGY` (`auto|pull|build`, default: `auto`)
+- `GROOT_VERSION`, `GROOT_FALLBACK_VERSIONS`, `GROOT_APPIMAGE_URL`, `GROOT_SHA256`
+- `FOXGLOVE_PORT` (default: `8765`), `FOXGLOVE_ADDRESS` (default: `0.0.0.0`)
 
-Ways to set variables:
-- Edit the top of `ROS2X` and set your preferred defaults
-- Or prefix for a single invocation (values are captured into `docker/.env`):
+## micro-ROS Workflow
+
+Enable micro-ROS bootstrap and build:
 
 ```bash
-ROS_DISTRO=humble ROS_DOMAIN_ID=12 INSTALL_MICRO_ROS=false ./ROS2X build
+./ROS2X config set INSTALL_MICRO_ROS true
+./ROS2X build
 ```
 
-## What the Container Does
-- Uses host networking (`network_mode: host`) and privileged mode to access `/dev`
-- Mounts the repository root to `/home/ros/workspace` inside the container
-- Maps your host user ID and group ID for correct file ownership
-- Optionally clones `micro_ros_setup` into `src/micro_ros` (if not present) and builds
-- Runs your `LAUNCH_COMMAND` when `./ROS2X run` is used
+Run agent example:
 
-## micro-ROS Notes
-- Set `INSTALL_MICRO_ROS=false` to skip micro-ROS.
-- If `src/micro_ros` already exists, it will be used and built.
-- If you have a custom `scripts/build_micro_ros.sh`, it will be executed automatically after the base build.
+```bash
+./ROS2X --command "ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyUSB0 -b 115200 -v6"
+```
 
-## Native (Non-Docker) Install (Optional)
-If you prefer a native Ubuntu 22.04 setup, use `scripts/install_ros2_humble.sh`.
+## Foxglove Bridge
+
+```bash
+./ROS2X bridge
+```
+
+Custom bind:
+
+```bash
+./ROS2X config set FOXGLOVE_ADDRESS 0.0.0.0
+./ROS2X config set FOXGLOVE_PORT 8765
+./ROS2X bridge
+```
+
+## Groot2
+
+```bash
+./ROS2X app groot
+```
+
+AppImage target path:
+`apps/groot/groot.AppImage`
+
+## Runtime Behavior
+
+1. `ROS2X` resolves config and writes compose env.
+2. `image-build` builds image only.
+3. `build` runs workspace build inside container.
+   - If `INSTALL_MICRO_ROS=true`, bootstrap runs first, then workspace build still runs.
+4. `run` auto-builds only when workspace is not built, then executes `LAUNCH_COMMAND`.
+5. `app groot` and `bridge` only stop the container if they started it in that invocation.
+   Existing running containers are kept alive.
+
+## Compatibility
+
+- Host OS: Linux (Docker Engine + Docker Compose v2 required)
+- CPU arch: `x86_64`, `aarch64`
+- ROS distro:
+  - Script supports configurable distro values.
+  - Docker image base is Ubuntu 22.04, so Jammy-aligned distros are the primary path.
+- macOS and Windows hosts are not first-class targets for this repo's default setup.
+
+## Native Installer (Optional)
+
+Use the same installer script outside Docker on Ubuntu:
 
 ```bash
 chmod +x scripts/install_ros2_humble.sh
-./scripts/install_ros2_humble.sh
+./scripts/install_ros2_humble.sh --ros-distro humble --install-type development
 ```
 
-This interactive script configures locales, apt sources, and installs `ros-humble-*` with development tools. It is intended for Ubuntu 22.04 (Jammy) on x86_64/aarch64.
+Common flags:
 
-## Troubleshooting
-- **No GUI/Display**: Ensure X is running on host. The script runs `xhost +local:` automatically. On Wayland, you may need additional configuration.
-- **Permission issues**: The entrypoint remaps user IDs to match your host. If you previously created files as root, fix ownership on the host: `sudo chown -R "$USER:$USER" .`.
-- **DDS conflicts**: Change `ROS_DOMAIN_ID` to isolate networks when multiple ROS graphs are present.
-- **Port conflicts**: Because host networking is used, ensure required ports aren’t blocked on your host.
+- `--non-interactive`
+- `--configure-bashrc yes|no|ask`
+- `--skip-upgrade`
+- `--no-install-recommends`
+- `--allow-root`
+- `--force-unsupported`
+
+## Repository Layout
+
+```text
+ROS2X
+├── ROS2X
+├── docker
+│   ├── Dockerfile
+│   ├── docker-compose.yaml
+│   ├── entrypoint.sh
+│   └── .bashrc
+├── apps
+│   └── groot
+├── ros2_ws
+│   └── src
+├── config
+│   └── ros2x.conf.example
+└── scripts
+    ├── install_ros2_humble.sh
+    ├── install_micro_ros.sh
+    └── install_groot2.sh
+```
+
+## Notes
+
+- `network_mode: host` and `privileged: true` are enabled for robotics use cases.
+- If hardware passthrough is not required, tighten container privileges accordingly.
+- For multi-robot LAN scenarios, assign distinct `ROS_DOMAIN_ID` values.

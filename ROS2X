@@ -1,30 +1,766 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Get the directory of the script
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cd $DIR
+set -euo pipefail
 
-# Open Xhost
-xhost +local: > /dev/null 2>&1
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+DOCKER_DIR="${DIR}/docker"
+CONFIG_DIR="${DIR}/config"
+CONFIG_FILE="${CONFIG_DIR}/ros2x.conf"
+CONFIG_TEMPLATE_FILE="${CONFIG_DIR}/ros2x.conf.example"
+SERVICE_NAME="ros2x"
+WORKSPACE_DIR="${DIR}/ros2_ws"
 
-cd ./docker
+DEFAULT_ROS_DISTRO="humble"
+DEFAULT_ROS_INSTALL_TYPE="ros-base"
+DEFAULT_ROS_DOMAIN_ID="0"
+DEFAULT_PROJECT_NAME="ros2x"
+DEFAULT_INSTALL_MICRO_ROS="false"
+DEFAULT_LAUNCH_COMMAND="echo '[TO-DO] Set LAUNCH_COMMAND in ROS2X'"
+DEFAULT_IMAGE_STRATEGY="auto"
+DEFAULT_IMAGE_REPOSITORY="ghcr.io/seanchangx/ros2x"
+DEFAULT_GROOT_VERSION="1.9.0"
+DEFAULT_GROOT_FALLBACK_VERSIONS="1.8.1,1.8.0,1.7.1,1.7.0,1.6.1"
+DEFAULT_FOXGLOVE_PORT="8765"
+DEFAULT_FOXGLOVE_ADDRESS="0.0.0.0"
 
-# Environment variables
-export LAUNCH_COMMAND="echo '[TO-DO] Set LAUNCH_COMMAND in ROS2X'"
-export ROS_DISTRO=${ROS_DISTRO:-humble}
-export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:=100}
-export PROJECT_NAME=${PROJECT_NAME:-ros2x}
-export INSTALL_MICRO_ROS=${INSTALL_MICRO_ROS:-true}
+CONFIG_KEYS=(
+    ROS_DISTRO
+    ROS_INSTALL_TYPE
+    ROS_DOMAIN_ID
+    PROJECT_NAME
+    INSTALL_MICRO_ROS
+    LAUNCH_COMMAND
+    IMAGE_NAME
+    IMAGE_STRATEGY
+    GROOT_VERSION
+    GROOT_FALLBACK_VERSIONS
+    GROOT_APPIMAGE_URL
+    GROOT_SHA256
+    FOXGLOVE_PORT
+    FOXGLOVE_ADDRESS
+)
 
-# Create or overwrite the .env file with static settings
-# Overwrite the .env file with the desired content
-cat <<EOL > .env
+trim_whitespace() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+is_supported_config_key() {
+    local key="$1"
+    local k
+    for k in "${CONFIG_KEYS[@]}"; do
+        if [[ "${k}" == "${key}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+set_runtime_var() {
+    local key="$1"
+    local value="$2"
+    case "${key}" in
+        ROS_DISTRO|ROS_INSTALL_TYPE|ROS_DOMAIN_ID|PROJECT_NAME|INSTALL_MICRO_ROS|LAUNCH_COMMAND|IMAGE_NAME|IMAGE_STRATEGY|GROOT_VERSION|GROOT_FALLBACK_VERSIONS|GROOT_APPIMAGE_URL|GROOT_SHA256|FOXGLOVE_PORT|FOXGLOVE_ADDRESS)
+            printf -v "${key}" '%s' "${value}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+load_user_config_defaults() {
+    [[ -f "${CONFIG_FILE}" ]] || return 0
+
+    local raw line key value
+    while IFS= read -r raw || [[ -n "${raw}" ]]; do
+        line="$(trim_whitespace "${raw}")"
+        [[ -z "${line}" ]] && continue
+        [[ "${line}" == \#* ]] && continue
+        [[ "${line}" != *"="* ]] && continue
+
+        key="$(trim_whitespace "${line%%=*}")"
+        value="$(trim_whitespace "${line#*=}")"
+
+        if ! is_supported_config_key "${key}"; then
+            continue
+        fi
+
+        if [[ -z "${!key+x}" ]]; then
+            set_runtime_var "${key}" "${value}"
+        fi
+    done < "${CONFIG_FILE}"
+}
+
+load_user_config_defaults
+
+ROS_DISTRO="${ROS_DISTRO:-${DEFAULT_ROS_DISTRO}}"
+ROS_INSTALL_TYPE="${ROS_INSTALL_TYPE:-${DEFAULT_ROS_INSTALL_TYPE}}"
+ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-${DEFAULT_ROS_DOMAIN_ID}}"
+PROJECT_NAME="${PROJECT_NAME:-${DEFAULT_PROJECT_NAME}}"
+INSTALL_MICRO_ROS="${INSTALL_MICRO_ROS:-${DEFAULT_INSTALL_MICRO_ROS}}"
+LAUNCH_COMMAND="${LAUNCH_COMMAND:-${DEFAULT_LAUNCH_COMMAND}}"
+case "${ROS_INSTALL_TYPE}" in
+    ros-base)
+        IMAGE_FLAVOR_TAG="base"
+        ;;
+    development)
+        IMAGE_FLAVOR_TAG="dev"
+        ;;
+    desktop)
+        IMAGE_FLAVOR_TAG="desktop"
+        ;;
+    *)
+        IMAGE_FLAVOR_TAG="${ROS_INSTALL_TYPE}"
+        ;;
+esac
+IMAGE_NAME="${IMAGE_NAME:-${DEFAULT_IMAGE_REPOSITORY}:${ROS_DISTRO}-${IMAGE_FLAVOR_TAG}}"
+IMAGE_STRATEGY="${IMAGE_STRATEGY:-${DEFAULT_IMAGE_STRATEGY}}"
+GROOT_VERSION="${GROOT_VERSION:-${DEFAULT_GROOT_VERSION}}"
+GROOT_FALLBACK_VERSIONS="${GROOT_FALLBACK_VERSIONS:-${DEFAULT_GROOT_FALLBACK_VERSIONS}}"
+GROOT_APPIMAGE_URL="${GROOT_APPIMAGE_URL:-}"
+GROOT_SHA256="${GROOT_SHA256:-}"
+FOXGLOVE_PORT="${FOXGLOVE_PORT:-${DEFAULT_FOXGLOVE_PORT}}"
+FOXGLOVE_ADDRESS="${FOXGLOVE_ADDRESS:-${DEFAULT_FOXGLOVE_ADDRESS}}"
+AUTO_BUILD="false"
+AUTO_RUN="false"
+
+ACTION="${1:-}"
+shift || true
+ACTION_ARGS=("$@")
+CUSTOM_COMMAND="${*:-}"
+
+XHOST_OPENED="false"
+
+# ANSI color palette for CLI output (minimal professional style).
+C_RESET=$'\033[0m'
+C_TITLE=$'\033[1;97m'
+C_SECTION=$'\033[1;38;5;250m'
+C_CMD=$'\033[1;38;5;45m'
+C_LABEL=$'\033[1;38;5;110m'
+C_VALUE=$'\033[38;5;252m'
+C_MUTED=$'\033[38;5;244m'
+
+compose() {
+    (cd "${DOCKER_DIR}" && docker compose "$@")
+}
+
+docker_accessible() {
+    docker info >/dev/null 2>&1
+}
+
+container_running() {
+    docker ps --filter "name=^/${PROJECT_NAME}$" --filter "status=running" -q | grep -q .
+}
+
+print_usage() {
+    printf "%bROS2X CLI%b %b[container robotics workflow]%b\n" "${C_TITLE}" "${C_RESET}" "${C_MUTED}" "${C_RESET}"
+    printf "%b----------------------------------------%b\n" "${C_MUTED}" "${C_RESET}"
+    printf "%bUsage%b\n  %b./ROS2X <command>%b\n\n" "${C_SECTION}" "${C_RESET}" "${C_CMD}" "${C_RESET}"
+
+    printf "%bCore Commands%b\n" "${C_SECTION}" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "build" "${C_RESET}" "${C_MUTED}" "Build the ROS workspace" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "run" "${C_RESET}" "${C_MUTED}" "Run the main program" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "bridge" "${C_RESET}" "${C_MUTED}" "Run Foxglove Bridge" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "enter" "${C_RESET}" "${C_MUTED}" "Enter the container" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "close" "${C_RESET}" "${C_MUTED}" "Stop the container" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "--command <cmd>" "${C_RESET}" "${C_MUTED}" "Run a custom command" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "--help" "${C_RESET}" "${C_MUTED}" "Show this help message" "${C_RESET}"
+    echo
+
+    printf "%bAdvanced Commands%b\n" "${C_SECTION}" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "app <name>" "${C_RESET}" "${C_MUTED}" "Launch app by name" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "config [...]" "${C_RESET}" "${C_MUTED}" "Show/manage persistent configuration" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "image-build" "${C_RESET}" "${C_MUTED}" "Build/update Docker image only" "${C_RESET}"
+    echo
+
+    printf "%bExamples%b\n" "${C_SECTION}" "${C_RESET}"
+    printf "  %b%s%b\n" "${C_CMD}" "./ROS2X app groot" "${C_RESET}"
+    printf "  %b%s%b\n" "${C_CMD}" "./ROS2X config set ROS_DOMAIN_ID 12" "${C_RESET}"
+    printf "  %b%s%b\n" "${C_CMD}" "./ROS2X --command \"ros2 launch my_pkg my_launch.py\"" "${C_RESET}"
+    printf "%b----------------------------------------%b\n" "${C_MUTED}" "${C_RESET}"
+}
+
+show_config() {
+    printf "%bROS2X Configuration%b\n" "${C_TITLE}" "${C_RESET}"
+    printf "%b----------------------------------------%b\n" "${C_MUTED}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Project Name" "${C_RESET}" "${C_VALUE}" "${PROJECT_NAME}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "ROS Distribution" "${C_RESET}" "${C_VALUE}" "${ROS_DISTRO}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "ROS Install Type" "${C_RESET}" "${C_VALUE}" "${ROS_INSTALL_TYPE}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "ROS Domain ID" "${C_RESET}" "${C_VALUE}" "${ROS_DOMAIN_ID}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Launch Command" "${C_RESET}" "${C_VALUE}" "${LAUNCH_COMMAND}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Install micro-ROS" "${C_RESET}" "${C_VALUE}" "${INSTALL_MICRO_ROS}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Image Name" "${C_RESET}" "${C_VALUE}" "${IMAGE_NAME}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Image Strategy" "${C_RESET}" "${C_VALUE}" "${IMAGE_STRATEGY}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Foxglove Port" "${C_RESET}" "${C_VALUE}" "${FOXGLOVE_PORT}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Foxglove Address" "${C_RESET}" "${C_VALUE}" "${FOXGLOVE_ADDRESS}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Groot Version" "${C_RESET}" "${C_VALUE}" "${GROOT_VERSION}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Config File" "${C_RESET}" "${C_VALUE}" "${CONFIG_FILE}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "User ID" "${C_RESET}" "${C_VALUE}" "$(id -u)" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Group ID" "${C_RESET}" "${C_VALUE}" "$(id -g)" "${C_RESET}"
+    printf "%b----------------------------------------%b\n" "${C_MUTED}" "${C_RESET}"
+}
+
+ensure_config_dir() {
+    mkdir -p "${CONFIG_DIR}"
+}
+
+write_default_config_file() {
+    local target_file="${1:-${CONFIG_FILE}}"
+    cat > "${target_file}" <<EOF
+# ROS2X persistent configuration
+# This file is read by ./ROS2X.
+# Environment variables passed inline still have higher priority.
+#
+# Example:
+#   ROS_DOMAIN_ID=12
+#   IMAGE_STRATEGY=build
+
+ROS_DISTRO=${DEFAULT_ROS_DISTRO}
+ROS_INSTALL_TYPE=${DEFAULT_ROS_INSTALL_TYPE}
+ROS_DOMAIN_ID=${DEFAULT_ROS_DOMAIN_ID}
+PROJECT_NAME=${DEFAULT_PROJECT_NAME}
+INSTALL_MICRO_ROS=${DEFAULT_INSTALL_MICRO_ROS}
+LAUNCH_COMMAND=${DEFAULT_LAUNCH_COMMAND}
+# Leave empty to auto-generate: ${DEFAULT_IMAGE_REPOSITORY}:<ROS_DISTRO>-<flavor>
+IMAGE_NAME=
+IMAGE_STRATEGY=${DEFAULT_IMAGE_STRATEGY}
+GROOT_VERSION=${DEFAULT_GROOT_VERSION}
+GROOT_FALLBACK_VERSIONS=${DEFAULT_GROOT_FALLBACK_VERSIONS}
+GROOT_APPIMAGE_URL=
+GROOT_SHA256=
+FOXGLOVE_PORT=${DEFAULT_FOXGLOVE_PORT}
+FOXGLOVE_ADDRESS=${DEFAULT_FOXGLOVE_ADDRESS}
+EOF
+}
+
+ensure_config_file() {
+    ensure_config_dir
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        if [[ -f "${CONFIG_TEMPLATE_FILE}" ]]; then
+            cp "${CONFIG_TEMPLATE_FILE}" "${CONFIG_FILE}"
+        else
+            write_default_config_file "${CONFIG_FILE}"
+        fi
+    fi
+}
+
+set_persisted_config_value() {
+    local key="$1"
+    local value="$2"
+    ensure_config_file
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+    local replaced="false"
+    local raw line current_key
+
+    while IFS= read -r raw || [[ -n "${raw}" ]]; do
+        line="$(trim_whitespace "${raw}")"
+        if [[ -n "${line}" && "${line}" != \#* && "${line}" == *"="* ]]; then
+            current_key="$(trim_whitespace "${line%%=*}")"
+            if [[ "${current_key}" == "${key}" ]]; then
+                printf "%s=%s\n" "${key}" "${value}" >> "${tmp_file}"
+                replaced="true"
+                continue
+            fi
+        fi
+        printf "%s\n" "${raw}" >> "${tmp_file}"
+    done < "${CONFIG_FILE}"
+
+    if [[ "${replaced}" != "true" ]]; then
+        printf "%s=%s\n" "${key}" "${value}" >> "${tmp_file}"
+    fi
+
+    mv "${tmp_file}" "${CONFIG_FILE}"
+}
+
+unset_persisted_config_value() {
+    local key="$1"
+    ensure_config_file
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+    local raw line current_key
+
+    while IFS= read -r raw || [[ -n "${raw}" ]]; do
+        line="$(trim_whitespace "${raw}")"
+        if [[ -n "${line}" && "${line}" != \#* && "${line}" == *"="* ]]; then
+            current_key="$(trim_whitespace "${line%%=*}")"
+            if [[ "${current_key}" == "${key}" ]]; then
+                continue
+            fi
+        fi
+        printf "%s\n" "${raw}" >> "${tmp_file}"
+    done < "${CONFIG_FILE}"
+
+    mv "${tmp_file}" "${CONFIG_FILE}"
+}
+
+get_persisted_config_value() {
+    local key="$1"
+    [[ -f "${CONFIG_FILE}" ]] || return 1
+
+    local raw line current_key value
+    while IFS= read -r raw || [[ -n "${raw}" ]]; do
+        line="$(trim_whitespace "${raw}")"
+        [[ -z "${line}" || "${line}" == \#* ]] && continue
+        [[ "${line}" != *"="* ]] && continue
+        current_key="$(trim_whitespace "${line%%=*}")"
+        if [[ "${current_key}" == "${key}" ]]; then
+            value="$(trim_whitespace "${line#*=}")"
+            printf "%s" "${value}"
+            return 0
+        fi
+    done < "${CONFIG_FILE}"
+
+    return 1
+}
+
+print_supported_config_keys() {
+    local k
+    for k in "${CONFIG_KEYS[@]}"; do
+        echo "  - ${k}"
+    done
+}
+
+print_config_key_options() {
+    local key="$1"
+    case "${key}" in
+        ROS_INSTALL_TYPE)
+            echo "  - ros-base"
+            echo "  - desktop"
+            echo "  - development"
+            ;;
+        IMAGE_STRATEGY)
+            echo "  - auto"
+            echo "  - pull"
+            echo "  - build"
+            ;;
+        INSTALL_MICRO_ROS)
+            echo "  - true"
+            echo "  - false"
+            ;;
+        ROS_DOMAIN_ID)
+            echo "  - Integer 0-232 (recommended default: 0)"
+            ;;
+        FOXGLOVE_PORT)
+            echo "  - Integer 1-65535 (recommended default: 8765)"
+            ;;
+        FOXGLOVE_ADDRESS)
+            echo "  - IP/host bind address (recommended default: 0.0.0.0)"
+            ;;
+        *)
+            echo "  - (free text)"
+            ;;
+    esac
+}
+
+print_config_key_hint() {
+    local key="$1"
+    echo "Key: ${key}"
+    echo "Allowed values:"
+    print_config_key_options "${key}"
+    echo "Example:"
+    case "${key}" in
+        ROS_INSTALL_TYPE)
+            echo "  ./ROS2X config set ROS_INSTALL_TYPE desktop"
+            ;;
+        IMAGE_STRATEGY)
+            echo "  ./ROS2X config set IMAGE_STRATEGY auto"
+            ;;
+        INSTALL_MICRO_ROS)
+            echo "  ./ROS2X config set INSTALL_MICRO_ROS true"
+            ;;
+        ROS_DOMAIN_ID)
+            echo "  ./ROS2X config set ROS_DOMAIN_ID 0"
+            ;;
+        FOXGLOVE_PORT)
+            echo "  ./ROS2X config set FOXGLOVE_PORT 8765"
+            ;;
+        FOXGLOVE_ADDRESS)
+            echo "  ./ROS2X config set FOXGLOVE_ADDRESS 0.0.0.0"
+            ;;
+        *)
+            echo "  ./ROS2X config set ${key} <VALUE>"
+            ;;
+    esac
+}
+
+validate_config_value() {
+    local key="$1"
+    local value="$2"
+    case "${key}" in
+        ROS_INSTALL_TYPE)
+            case "${value}" in
+                ros-base|desktop|development) ;;
+                *)
+                    echo "Error: ROS_INSTALL_TYPE must be one of: ros-base, desktop, development"
+                    return 1
+                    ;;
+            esac
+            ;;
+        IMAGE_STRATEGY)
+            case "${value}" in
+                auto|pull|build) ;;
+                *)
+                    echo "Error: IMAGE_STRATEGY must be one of: auto, pull, build"
+                    return 1
+                    ;;
+            esac
+            ;;
+        INSTALL_MICRO_ROS)
+            case "${value}" in
+                true|false) ;;
+                *)
+                    echo "Error: INSTALL_MICRO_ROS must be one of: true, false"
+                    return 1
+                    ;;
+            esac
+            ;;
+        ROS_DOMAIN_ID)
+            if ! [[ "${value}" =~ ^[0-9]+$ ]]; then
+                echo "Error: ROS_DOMAIN_ID must be an integer between 0 and 232"
+                return 1
+            fi
+            if (( value < 0 || value > 232 )); then
+                echo "Error: ROS_DOMAIN_ID must be between 0 and 232"
+                return 1
+            fi
+            ;;
+        FOXGLOVE_PORT)
+            if ! [[ "${value}" =~ ^[0-9]+$ ]]; then
+                echo "Error: FOXGLOVE_PORT must be an integer between 1 and 65535"
+                return 1
+            fi
+            if (( value < 1 || value > 65535 )); then
+                echo "Error: FOXGLOVE_PORT must be between 1 and 65535"
+                return 1
+            fi
+            ;;
+        FOXGLOVE_ADDRESS)
+            if [[ -z "${value}" ]]; then
+                echo "Error: FOXGLOVE_ADDRESS cannot be empty"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+print_config_command_usage() {
+    echo "Usage:"
+    echo "  ./ROS2X config"
+    echo "  ./ROS2X config path"
+    echo "  ./ROS2X config init"
+    echo "  ./ROS2X config list"
+    echo "  ./ROS2X config keys"
+    echo "  ./ROS2X config options <KEY>"
+    echo "  ./ROS2X config get <KEY>"
+    echo "  ./ROS2X config set <KEY> <VALUE>"
+    echo "  ./ROS2X config unset <KEY>"
+}
+
+handle_config_command() {
+    local subcommand="${1:-show}"
+
+    case "${subcommand}" in
+        show)
+            show_config
+            ;;
+        path)
+            echo "${CONFIG_FILE}"
+            ;;
+        init)
+            ensure_config_file
+            echo "Config file ready: ${CONFIG_FILE}"
+            ;;
+        list)
+            ensure_config_file
+            echo "Config file: ${CONFIG_FILE}"
+            cat "${CONFIG_FILE}"
+            ;;
+        keys)
+            echo "Supported keys:"
+            print_supported_config_keys
+            ;;
+        options)
+            local key="${2:-}"
+            if [[ -z "${key}" ]]; then
+                echo "Error: Missing key."
+                echo "Usage: ./ROS2X config options <KEY>"
+                return 1
+            fi
+            if ! is_supported_config_key "${key}"; then
+                echo "Error: Unsupported key '${key}'."
+                print_supported_config_keys
+                return 1
+            fi
+            print_config_key_hint "${key}"
+            ;;
+        get)
+            local key="${2:-}"
+            if [[ -z "${key}" ]]; then
+                echo "Error: Missing key."
+                print_config_command_usage
+                return 1
+            fi
+            if ! is_supported_config_key "${key}"; then
+                echo "Error: Unsupported key '${key}'."
+                print_supported_config_keys
+                return 1
+            fi
+            local persisted=""
+            if persisted="$(get_persisted_config_value "${key}")"; then
+                echo "${key}=${persisted}"
+            else
+                echo "${key} is not set in ${CONFIG_FILE}"
+            fi
+            ;;
+        set)
+            local key="${2:-}"
+            if [[ -z "${key}" ]]; then
+                echo "Error: Usage: ./ROS2X config set <KEY> <VALUE>"
+                return 1
+            fi
+            if ! is_supported_config_key "${key}"; then
+                echo "Error: Unsupported key '${key}'."
+                print_supported_config_keys
+                return 1
+            fi
+            if [[ $# -lt 3 ]]; then
+                echo "Error: Missing value for '${key}'."
+                print_config_key_hint "${key}"
+                return 1
+            fi
+            shift 2 || true
+            local value="$*"
+            if ! validate_config_value "${key}" "${value}"; then
+                print_config_key_hint "${key}"
+                return 1
+            fi
+            set_persisted_config_value "${key}" "${value}"
+            echo "Updated ${key} in ${CONFIG_FILE}"
+            ;;
+        unset)
+            local key="${2:-}"
+            if [[ -z "${key}" ]]; then
+                echo "Error: Usage: ./ROS2X config unset <KEY>"
+                return 1
+            fi
+            if ! is_supported_config_key "${key}"; then
+                echo "Error: Unsupported key '${key}'."
+                print_supported_config_keys
+                return 1
+            fi
+            unset_persisted_config_value "${key}"
+            echo "Removed ${key} from ${CONFIG_FILE}"
+            ;;
+        *)
+            echo "Error: Unknown config subcommand '${subcommand}'."
+            print_config_command_usage
+            return 1
+            ;;
+    esac
+}
+
+validate_image_strategy() {
+    case "${IMAGE_STRATEGY}" in
+        auto|pull|build) ;;
+        *)
+            echo "Error: IMAGE_STRATEGY must be one of: auto, pull, build"
+            exit 1
+            ;;
+    esac
+}
+
+local_image_exists() {
+    docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1
+}
+
+compose_up_with_strategy() {
+    local detached="${1:-false}"
+    local -a up_args
+    up_args=("${SERVICE_NAME}")
+    if [[ "${detached}" == "true" ]]; then
+        up_args=(-d "${SERVICE_NAME}")
+    fi
+
+    case "${IMAGE_STRATEGY}" in
+        build)
+            echo "Using local Docker build strategy..."
+            compose up --build "${up_args[@]}"
+            ;;
+        pull)
+            echo "Pulling image '${IMAGE_NAME}'..."
+            compose pull "${SERVICE_NAME}"
+            compose up "${up_args[@]}"
+            ;;
+        auto)
+            if local_image_exists; then
+                echo "Using cached local image '${IMAGE_NAME}'."
+                compose up "${up_args[@]}"
+            else
+                echo "No local image found. Trying prebuilt image '${IMAGE_NAME}'..."
+                if compose pull "${SERVICE_NAME}"; then
+                    compose up "${up_args[@]}"
+                else
+                    echo "Image pull failed and no local cache found. Falling back to local build..."
+                    compose up --build "${up_args[@]}"
+                fi
+            fi
+            ;;
+    esac
+}
+
+list_apps() {
+    echo "Available apps:"
+    echo "  - groot"
+}
+
+launch_groot() {
+    echo "Launching Groot..."
+    local started_here="false"
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
+        started_here="true"
+    fi
+
+    set +e
+    compose exec --user ros ${SERVICE_NAME} bash -lc '
+        set -e
+        app="/home/ros/ROS2X/apps/groot/groot.AppImage"
+        if [ ! -x "${app}" ]; then
+            bash "/home/ros/ROS2X/scripts/install_groot2.sh"
+        fi
+        if [ ! -x "${app}" ]; then
+            echo "Error: Groot AppImage is not executable: ${app}" >&2
+            exit 1
+        fi
+        exec "${app}"
+    '
+    app_status=$?
+    set -e
+
+    if [[ "${started_here}" == "true" ]]; then
+        echo "Groot process exited. Stopping temporary container..."
+        compose down || true
+    else
+        echo "Groot process exited. Container was already running; leaving it up."
+    fi
+    return "${app_status}"
+}
+
+launch_app() {
+    local app_name="${1:-}"
+
+    if [[ -z "${app_name}" ]]; then
+        list_apps
+        if [[ -t 0 ]]; then
+            read -r -p "Select app: " app_name
+        else
+            echo "Error: No app specified. Use './ROS2X app <name>'."
+            exit 1
+        fi
+    fi
+
+    case "${app_name}" in
+        groot)
+            launch_groot
+            ;;
+        *)
+            echo "Error: Unknown app '${app_name}'."
+            list_apps
+            exit 1
+            ;;
+    esac
+}
+
+launch_foxglove_bridge() {
+    echo "Launching Foxglove Bridge on ${FOXGLOVE_ADDRESS}:${FOXGLOVE_PORT}..."
+    local started_here="false"
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
+        started_here="true"
+    fi
+
+    set +e
+    compose exec --user ros \
+        -e ROS2X_FOXGLOVE_PORT="${FOXGLOVE_PORT}" \
+        -e ROS2X_FOXGLOVE_ADDRESS="${FOXGLOVE_ADDRESS}" \
+        ${SERVICE_NAME} bash -lc '
+            set -e
+            set +u
+            source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+            if [ -f "/home/ros/ROS2X/ros2_ws/install/setup.bash" ]; then
+                source "/home/ros/ROS2X/ros2_ws/install/setup.bash"
+            fi
+            set -u
+
+            if ! ros2 pkg executables foxglove_bridge 2>/dev/null | grep -q "foxglove_bridge"; then
+                echo "Error: foxglove_bridge executable not found." >&2
+                echo "Hint: rebuild image or install package ros-${ROS_DISTRO:-humble}-foxglove-bridge." >&2
+                exit 1
+            fi
+
+            exec ros2 run foxglove_bridge foxglove_bridge \
+                --port "${ROS2X_FOXGLOVE_PORT}" \
+                --address "${ROS2X_FOXGLOVE_ADDRESS}"
+        '
+    bridge_status=$?
+    set -e
+
+    if [[ "${started_here}" == "true" ]]; then
+        echo "Foxglove Bridge exited. Stopping temporary container..."
+        compose down || true
+    else
+        echo "Foxglove Bridge exited. Container was already running; leaving it up."
+    fi
+    return "${bridge_status}"
+}
+
+open_xhost_if_needed() {
+    case "${ACTION}" in
+        build|run|app|enter|--command)
+            if command -v xhost >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+                xhost +local: >/dev/null 2>&1 || true
+                XHOST_OPENED="true"
+            fi
+            ;;
+    esac
+}
+
+cleanup() {
+    if [[ "${XHOST_OPENED}" == "true" ]]; then
+        xhost -local: >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
+
+write_env() {
+    mkdir -p "${WORKSPACE_DIR}"
+    mkdir -p "${WORKSPACE_DIR}/src"
+
+    cat > "${DOCKER_DIR}/.env" <<EOL
+# ========================================================
+# AUTO-GENERATED FILE - DO NOT EDIT MANUALLY
+# This file is overwritten by ./ROS2X on every command run.
+#
+# How to customize values:
+# 1) One-off:   VAR=value ./ROS2X <command>
+# 2) Persistent defaults: use ./ROS2X config set <KEY> <VALUE>
+# ========================================================
+#
 # Docker Compose Settings
 COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 COMPOSE_BAKE=true
 
 # ROS Settings
 ROS_DISTRO=${ROS_DISTRO}
+ROS_INSTALL_TYPE=${ROS_INSTALL_TYPE}
 ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
 
 # Project Settings
@@ -33,125 +769,124 @@ AUTO_BUILD=${AUTO_BUILD}
 AUTO_RUN=${AUTO_RUN}
 LAUNCH_COMMAND=${LAUNCH_COMMAND}
 INSTALL_MICRO_ROS=${INSTALL_MICRO_ROS}
+IMAGE_NAME=${IMAGE_NAME}
+IMAGE_STRATEGY=${IMAGE_STRATEGY}
+GROOT_VERSION=${GROOT_VERSION}
+GROOT_FALLBACK_VERSIONS=${GROOT_FALLBACK_VERSIONS}
+GROOT_APPIMAGE_URL=${GROOT_APPIMAGE_URL}
+GROOT_SHA256=${GROOT_SHA256}
+FOXGLOVE_PORT=${FOXGLOVE_PORT}
+FOXGLOVE_ADDRESS=${FOXGLOVE_ADDRESS}
 
 # Dynamic UID and GID
 LOCAL_USER_ID=$(id -u)
 LOCAL_GROUP_ID=$(id -g)
 EOL
+}
 
-# Ensure cleanup on script exit
-cleanup() {
-    if [[ "$ACTION" != "close" && "$ACTION" != "build" && "$ACTION" != "run" && "$ACTION" != "groot" ]]; then
-        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
-            echo "Container is still running. Use 'close' to stop it."
-        fi
-    elif [[ "$ACTION" == "close" ]]; then
-        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
-            docker compose down
-        fi
+ensure_container_running() {
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
     fi
-    xhost -local: > /dev/null 2>&1
-}
-trap cleanup EXIT
-
-# Argument handling
-ACTION=${1:-}
-CUSTOM_COMMAND=${2:-}
-
-print_usage() {
-    echo -e "\033[1;32m----- [ ROS2X Usage ] -----------------------\033[0m"
-    echo -e "\033[1;32m|\033[0m   build           - Build the ROS workspace"
-    echo -e "\033[1;32m|\033[0m   run             - Run the main program"
-    echo -e "\033[1;32m|\033[0m   groot           - Launch Groot2"
-    echo -e "\033[1;32m|\033[0m   enter           - Enter the container"
-    echo -e "\033[1;32m|\033[0m   close           - Stop the container"
-    echo -e "\033[1;32m|\033[0m   config          - Show current configuration"
-    echo -e "\033[1;32m|\033[0m   --command <cmd> - Run a custom command"
-    echo -e "\033[1;32m|\033[0m   --help          - Show this help message"
-    echo -e "\033[1;32m---------------------------------------------\033[0m"
 }
 
-show_config() {
-    echo -e "\033[1;36m----- [ ROS2X Configuration ] ---------------\033[0m"
-    echo -e "\033[1;36m|\033[0m   Project Name      : ${PROJECT_NAME}"
-    echo -e "\033[1;36m|\033[0m   ROS Distribution  : ${ROS_DISTRO}"
-    echo -e "\033[1;36m|\033[0m   ROS Domain ID     : ${ROS_DOMAIN_ID}"
-    echo -e "\033[1;36m|\033[0m   Launch Command    : ${LAUNCH_COMMAND:-Not set}"
-    echo -e "\033[1;36m|\033[0m   Install micro-ROS : ${INSTALL_MICRO_ROS}"
-    echo -e "\033[1;36m|\033[0m   User ID           : $(id -u)"
-    echo -e "\033[1;36m|\033[0m   Group ID          : $(id -g)"
-    echo -e "\033[1;36m---------------------------------------------\033[0m"
-}
-
-if [[ "$ACTION" == "config" ]]; then
-    show_config
-    exit 0
-fi
-
-if [[ "$ACTION" == "--help" || "$ACTION" == "-h" ]]; then
+if [[ "${ACTION}" == "--help" || "${ACTION}" == "-h" || -z "${ACTION}" ]]; then
     print_usage
     exit 0
 fi
 
-if [[ "$ACTION" == "--command" ]]; then
-    if [[ -z "$CUSTOM_COMMAND" ]]; then
-        echo "Error: No command specified for --command."
-        exit 1
-    fi
-    if ! docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
-        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
-        docker compose up -d
-    fi
-    docker compose exec ros2x bash -c "$CUSTOM_COMMAND"
-    exit 0
+if [[ "${ACTION}" == "config" ]]; then
+    handle_config_command "${ACTION_ARGS[@]}"
+    exit $?
 fi
 
-case $ACTION in
+case "${ACTION}" in
+    image-build)
+        AUTO_BUILD="false"
+        AUTO_RUN="false"
+        ;;
     build)
-        export AUTO_BUILD=true AUTO_RUN=false
-        echo "Building ROS workspace..."
-        docker compose up
+        AUTO_BUILD="true"
+        AUTO_RUN="false"
         ;;
     run)
-        export AUTO_BUILD=false AUTO_RUN=true
-        echo "Running the container..."
-        docker compose up
-        docker compose down
+        AUTO_BUILD="false"
+        AUTO_RUN="true"
         ;;
-    groot)
-        export AUTO_BUILD=false AUTO_RUN=false
-        echo "Launching Groot..."
-        docker compose up -d
-        docker compose exec --user ros ros2x bash -lc '
-            if [ ! -f "/home/ros/workspace/groot/groot.AppImage" ]; then
-                bash "/home/ros/workspace/groot/install_groot2.sh"
-            fi
-            exec "/home/ros/workspace/groot/groot.AppImage"
-        '
-        echo "Groot process exited. Stopping the container..."
-        docker compose down
-        ;;
-    enter)
-        export AUTO_BUILD=false AUTO_RUN=false
-        echo "Entering the container..."
-        if ! docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}"; then
-            echo -e "Container '${PROJECT_NAME}' is not running.\nStarting without build or run..."
-            docker compose up -d
-        fi
-        docker exec -it --user ros ${PROJECT_NAME} bash || echo "Exited container without shutting it down."
-        ;;
-    close)
-        export AUTO_BUILD=false AUTO_RUN=false
-        if docker ps --filter "name=${PROJECT_NAME}" --filter "status=running" | grep -q "${PROJECT_NAME}" || \
-           docker ps --filter "name=${PROJECT_NAME}" --filter "status=exited" | grep -q "${PROJECT_NAME}"; then
-            echo "Stopping the container..."
-            docker compose down
-        else
-            echo "Container is already stopped."
-        fi
+    bridge|app|enter|close|--command)
+        AUTO_BUILD="false"
+        AUTO_RUN="false"
         ;;
     *)
         print_usage
         exit 1
+        ;;
+esac
+
+write_env
+validate_image_strategy
+open_xhost_if_needed
+
+if [[ "${ACTION}" == "close" ]]; then
+    if docker_accessible; then
+        echo "Stopping the container..."
+        compose down || true
+    else
+        echo "Docker daemon is not accessible. Please check your Docker permissions."
+    fi
+    exit 0
+fi
+
+if ! docker_accessible; then
+    echo "Docker daemon is not accessible. Please check your Docker permissions."
+    exit 1
+fi
+
+case "${ACTION}" in
+    image-build)
+        echo "Building Docker image only..."
+        compose build "${SERVICE_NAME}"
+        ;;
+    build)
+        echo "Building ROS workspace..."
+        compose_up_with_strategy
+        ;;
+    run)
+        echo "Running launch command in container..."
+        set +e
+        compose_up_with_strategy
+        run_status=$?
+        set -e
+        compose down || true
+        exit "${run_status}"
+        ;;
+    bridge)
+        launch_foxglove_bridge
+        ;;
+    app)
+        launch_app "${ACTION_ARGS[0]:-}"
+        ;;
+    enter)
+        echo "Entering the container..."
+        ensure_container_running
+        docker exec -it --user ros "${PROJECT_NAME}" bash || echo "Exited container without shutting it down."
+        ;;
+    --command)
+        if [[ -z "${CUSTOM_COMMAND}" ]]; then
+            echo "Error: No command specified for --command."
+            exit 1
+        fi
+        ensure_container_running
+        compose exec --user ros -e ROS2X_CUSTOM_COMMAND="${CUSTOM_COMMAND}" ${SERVICE_NAME} bash -lc '
+            set -e
+            set +u
+            source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+            if [ -f "/home/ros/ROS2X/ros2_ws/install/setup.bash" ]; then
+                source "/home/ros/ROS2X/ros2_ws/install/setup.bash"
+            fi
+            set -u
+            bash -lc "${ROS2X_CUSTOM_COMMAND}"
+        '
         ;;
 esac

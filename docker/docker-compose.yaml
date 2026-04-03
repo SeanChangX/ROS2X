@@ -1,39 +1,49 @@
 services:
   ros2x:
     build:
-      context: .
-      dockerfile: Dockerfile
-      target: final
+      context: ..
+      dockerfile: docker/Dockerfile
       args:
         ROS_DISTRO: ${ROS_DISTRO}
+        ROS_INSTALL_TYPE: ${ROS_INSTALL_TYPE:-ros-base}
         USERNAME: ros
-    image: scx/ros2x:${ROS_DISTRO}
+    image: ${IMAGE_NAME:-ghcr.io/seanchangx/ros2x:${ROS_DISTRO}-base}
     container_name: ${PROJECT_NAME:-ros2x}
     stdin_open: true
     tty: true
     privileged: true
     network_mode: "host"
 
-    working_dir: /home/ros
+    working_dir: /home/ros/ROS2X/ros2_ws
 
     environment:
       - PROJECT_NAME=${PROJECT_NAME:-ros2x}
-      - ROS_WS=/home/ros/workspace
+      - ROS2X_ROOT=/home/ros/ROS2X
+      - ROS2X_WS=/home/ros/ROS2X/ros2_ws
+      - ROS_DISTRO=${ROS_DISTRO}
 
       - AUTO_BUILD=${AUTO_BUILD}
       - AUTO_RUN=${AUTO_RUN}
       - LOCAL_USER_ID=${LOCAL_USER_ID}
       - LOCAL_GROUP_ID=${LOCAL_GROUP_ID}
       - LAUNCH_COMMAND=${LAUNCH_COMMAND}
+      - INSTALL_MICRO_ROS=${INSTALL_MICRO_ROS}
       
       - DISPLAY=${DISPLAY}
-      - GROOT_APPIMAGE=/home/ros/workspace/groot/groot.AppImage
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+      - LANG=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+      - LANGUAGE=en_US:en
+      - GROOT_APPIMAGE=/home/ros/ROS2X/apps/groot/groot.AppImage
+      - GROOT_VERSION=${GROOT_VERSION:-1.9.0}
+      - GROOT_FALLBACK_VERSIONS=${GROOT_FALLBACK_VERSIONS:-1.8.1,1.8.0,1.7.1,1.7.0,1.6.1}
+      - GROOT_APPIMAGE_URL=${GROOT_APPIMAGE_URL:-}
+      - GROOT_SHA256=${GROOT_SHA256:-}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     
     volumes:
       # Mount app resources into container.
-      - ../:/home/ros/workspace
+      - ../:/home/ros/ROS2X
 
       # Mount local timezone into container.
       - /etc/timezone:/etc/timezone:ro
