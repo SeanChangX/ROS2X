@@ -171,7 +171,9 @@ if ((SKIP_AGENT_BUILD == 0)); then
     log "micro_ros_agent binary already exists; skipping build_agent.sh"
   else
     log "Building micro-ROS agent workspace ..."
-    ros2 run micro_ros_setup build_agent.sh
+    # Keep build mode aligned with the workspace build to avoid symlink collisions
+    # when entrypoint later runs `colcon build --symlink-install`.
+    ros2 run micro_ros_setup build_agent.sh --symlink-install
   fi
 else
   log "Skipping build_agent.sh."

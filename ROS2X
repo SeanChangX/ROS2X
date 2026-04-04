@@ -621,11 +621,9 @@ list_apps() {
 
 launch_groot() {
     echo "Launching Groot..."
-    local started_here="false"
     if ! container_running; then
         echo "Container '${PROJECT_NAME}' is not running. Starting it..."
         compose_up_with_strategy true
-        started_here="true"
     fi
 
     set +e
@@ -643,13 +641,8 @@ launch_groot() {
     '
     app_status=$?
     set -e
-
-    if [[ "${started_here}" == "true" ]]; then
-        echo "Groot process exited. Stopping temporary container..."
-        compose down || true
-    else
-        echo "Groot process exited. Container was already running; leaving it up."
-    fi
+    echo "Groot process exited. Container remains running for other tasks."
+    echo "Use './ROS2X close' to stop and remove the container."
     return "${app_status}"
 }
 
@@ -680,11 +673,9 @@ launch_app() {
 
 launch_foxglove_bridge() {
     echo "Launching Foxglove Bridge on ${FOXGLOVE_ADDRESS}:${FOXGLOVE_PORT}..."
-    local started_here="false"
     if ! container_running; then
         echo "Container '${PROJECT_NAME}' is not running. Starting it..."
         compose_up_with_strategy true
-        started_here="true"
     fi
 
     set +e
@@ -712,13 +703,8 @@ launch_foxglove_bridge() {
         '
     bridge_status=$?
     set -e
-
-    if [[ "${started_here}" == "true" ]]; then
-        echo "Foxglove Bridge exited. Stopping temporary container..."
-        compose down || true
-    else
-        echo "Foxglove Bridge exited. Container was already running; leaving it up."
-    fi
+    echo "Foxglove Bridge exited. Container remains running for other tasks."
+    echo "Use './ROS2X close' to stop and remove the container."
     return "${bridge_status}"
 }
 
