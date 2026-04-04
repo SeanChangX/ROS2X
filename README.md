@@ -55,7 +55,7 @@ workspace build, launch/run, micro-ROS bootstrap, and built-in app launchers.
 - Host UID/GID mapping for correct file ownership
 - X11 GUI support for RViz and AppImage tools
 - Integrated micro-ROS bootstrap flow (`scripts/install_micro_ros.sh`)
-- Built-in app launchers for Foxglove Bridge, RViz2, Gazebo, Groot2, and QGroundControl
+- Built-in app launchers for Foxglove Bridge, RViz2, Gazebo, Groot2 and QGroundControl
 - Persistent project config via `config/ros2x.conf`
 
 ## Quick Start
