@@ -614,6 +614,32 @@ local_image_exists() {
     docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1
 }
 
+wait_for_container_user_mapping() {
+    local expected_uid expected_gid
+    local max_attempts=100
+    local attempt=1
+
+    expected_uid="$(id -u)"
+    expected_gid="$(id -g)"
+
+    while (( attempt <= max_attempts )); do
+        if docker exec "${PROJECT_NAME}" bash -lc "
+            set -e
+            test \"\$(id -u ros 2>/dev/null)\" = \"${expected_uid}\"
+            test \"\$(id -g ros 2>/dev/null)\" = \"${expected_gid}\"
+            getent passwd \"${expected_uid}\" >/dev/null
+            getent group \"${expected_gid}\" >/dev/null
+        " >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.2
+        attempt=$((attempt + 1))
+    done
+
+    echo "Warning: container user mapping is not fully ready yet."
+    return 1
+}
+
 compose_up_with_strategy() {
     local detached="${1:-false}"
     local -a up_args
@@ -647,6 +673,10 @@ compose_up_with_strategy() {
             fi
             ;;
     esac
+
+    if [[ "${detached}" == "true" ]]; then
+        wait_for_container_user_mapping || true
+    fi
 }
 
 list_apps() {
