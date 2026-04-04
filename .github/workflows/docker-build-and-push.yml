@@ -6,12 +6,12 @@ on:
       - main
     paths:
       - "docker/**"
-      - "scripts/install_ros2_humble.sh"
+      - "scripts/install_ros2.sh"
       - ".github/workflows/docker-build-and-push.yml"
   pull_request:
     paths:
       - "docker/**"
-      - "scripts/install_ros2_humble.sh"
+      - "scripts/install_ros2.sh"
       - ".github/workflows/docker-build-and-push.yml"
   workflow_dispatch:
 

@@ -23,4 +23,7 @@ config/ros2x.conf
 
 # Other generated files
 *.AppImage
+# Per-app runtime state
+apps/*/config/
+apps/*/data/
 **/Backups/

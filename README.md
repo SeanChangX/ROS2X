@@ -10,7 +10,44 @@
 
 ROS2X is a Docker-first ROS 2 development toolbox focused on reproducible,
 robotics-friendly workflows. It provides one entrypoint script for image build,
-workspace build, launch/run, micro-ROS bootstrap, Foxglove Bridge, and Groot2.
+workspace build, launch/run, micro-ROS bootstrap, and built-in app launchers.
+
+<table>
+  <tr>
+    <td align="center" width="220">
+      <a href="https://foxglove.dev">
+        <img src="docs/assets/foxglove-logo.svg" alt="Foxglove" height="50" />
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://docs.ros.org/en/humble/Tutorials/Intermediate/RViz/RViz-User-Guide/RViz-User-Guide.html">
+        <img src="docs/assets/rviz-logo.png" alt="RViz2" height="50" />
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://gazebosim.org/docs/fortress/">
+        <img src="docs/assets/gazebo-logo.png" alt="Gazebo Fortress" height="50" />
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://www.behaviortree.dev/groot/">
+        <img src="docs/assets/groot2-logo.png" alt="Groot2" height="50" />
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://qgroundcontrol.com/">
+        <img src="docs/assets/qgroundcontrol-logo.svg" alt="QGroundControl" height="50" />
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><code>./ROS2X bridge</code></td>
+    <td align="center"><code>./ROS2X rviz</code></td>
+    <td align="center"><code>./ROS2X gazebo</code></td>
+    <td align="center"><code>./ROS2X app groot</code></td>
+    <td align="center"><code>./ROS2X app qgc</code></td>
+  </tr>
+</table>
 
 ## Highlights
 
@@ -18,8 +55,7 @@ workspace build, launch/run, micro-ROS bootstrap, Foxglove Bridge, and Groot2.
 - Host UID/GID mapping for correct file ownership
 - X11 GUI support for RViz and AppImage tools
 - Integrated micro-ROS bootstrap flow (`scripts/install_micro_ros.sh`)
-- Groot2 AppImage launcher (`./ROS2X app groot`)
-- Foxglove Bridge launcher (`./ROS2X bridge`)
+- Built-in app launchers for Foxglove Bridge, RViz2, Gazebo, Groot2, and QGroundControl
 - Persistent project config via `config/ros2x.conf`
 
 ## Quick Start
@@ -38,7 +74,10 @@ workspace build, launch/run, micro-ROS bootstrap, Foxglove Bridge, and Groot2.
 | `./ROS2X build` | Build workspace in container (`colcon build --symlink-install`) |
 | `./ROS2X run` | Run `LAUNCH_COMMAND` (auto-build if workspace not ready) |
 | `./ROS2X bridge` | Run Foxglove Bridge |
+| `./ROS2X rviz` | Launch RViz2 |
+| `./ROS2X gazebo` | Launch Gazebo (`ros2 launch ros_gz_sim gz_sim.launch.py`) |
 | `./ROS2X app groot` | Launch Groot2 AppImage |
+| `./ROS2X app qgroundcontrol` | Launch QGroundControl AppImage |
 | `./ROS2X enter` | Enter running container shell |
 | `./ROS2X --command "<cmd>"` | Execute one command in container |
 | `./ROS2X image-build` | Build/update Docker image only |
@@ -83,7 +122,24 @@ Main keys:
   - flavor mapping: `ros-base -> base`, `desktop -> desktop`, `development -> dev`
 - `IMAGE_STRATEGY` (`auto|pull|build`, default: `auto`)
 - `GROOT_VERSION`, `GROOT_FALLBACK_VERSIONS`, `GROOT_APPIMAGE_URL`, `GROOT_SHA256`
+- `QGC_VERSION` (`latest` or e.g. `5.0.8`), `QGC_APPIMAGE_URL`, `QGC_SHA256`
 - `FOXGLOVE_PORT` (default: `8765`), `FOXGLOVE_ADDRESS` (default: `0.0.0.0`)
+
+## Utility Tooling Example
+
+Run each utility independently with `--command`:
+
+```bash
+./ROS2X --command "ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+```
+
+```bash
+./ROS2X --command "ros2 launch teleop_twist_joy teleop-launch.py joy_config:=xbox joy_vel:=cmd_vel"
+```
+
+```bash
+./ROS2X --command "ros2 run image_tools cam2image --ros-args --log-level WARN -p video_device:=/dev/video0"
+```
 
 ## micro-ROS Workflow
 
@@ -114,6 +170,18 @@ Custom bind:
 ./ROS2X bridge
 ```
 
+## RViz2
+
+```bash
+./ROS2X rviz
+```
+
+## Gazebo
+
+```bash
+./ROS2X gazebo
+```
+
 ## Groot2
 
 ```bash
@@ -123,6 +191,15 @@ Custom bind:
 AppImage target path:
 `apps/groot/groot.AppImage`
 
+## QGroundControl
+
+```bash
+./ROS2X app qgroundcontrol
+```
+
+AppImage target path:
+`apps/qgroundcontrol/qgroundcontrol.AppImage`
+
 ## Runtime Behavior
 
 1. `ROS2X` resolves config and writes compose env.
@@ -130,8 +207,8 @@ AppImage target path:
 3. `build` runs workspace build inside container.
    - If `INSTALL_MICRO_ROS=true`, bootstrap runs first, then workspace build still runs.
 4. `run` auto-builds only when workspace is not built, then executes `LAUNCH_COMMAND`.
-5. `app groot` and `bridge` only stop the container if they started it in that invocation.
-   Existing running containers are kept alive.
+5. `bridge`, `rviz`, `gazebo`, `app groot`, and `app qgroundcontrol` keep the container running after the GUI/process exits.
+   Use `./ROS2X close` when you want to stop it.
 
 ## Compatibility
 
@@ -147,8 +224,8 @@ AppImage target path:
 Use the same installer script outside Docker on Ubuntu:
 
 ```bash
-chmod +x scripts/install_ros2_humble.sh
-./scripts/install_ros2_humble.sh --ros-distro humble --install-type development
+chmod +x scripts/install_ros2.sh
+./scripts/install_ros2.sh --ros-distro humble --install-type development
 ```
 
 Common flags:
@@ -171,15 +248,18 @@ ROS2X
 │   ├── entrypoint.sh
 │   └── .bashrc
 ├── apps
-│   └── groot
+│   ├── gazebo
+│   ├── groot
+│   └── qgroundcontrol
 ├── ros2_ws
 │   └── src
 ├── config
 │   └── ros2x.conf.example
 └── scripts
-    ├── install_ros2_humble.sh
+    ├── install_ros2.sh
     ├── install_micro_ros.sh
-    └── install_groot2.sh
+    ├── install_groot2.sh
+    └── install_qgroundcontrol.sh
 ```
 
 ## Notes

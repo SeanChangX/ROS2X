@@ -20,6 +20,7 @@ DEFAULT_IMAGE_STRATEGY="auto"
 DEFAULT_IMAGE_REPOSITORY="ghcr.io/seanchangx/ros2x"
 DEFAULT_GROOT_VERSION="1.9.0"
 DEFAULT_GROOT_FALLBACK_VERSIONS="1.8.1,1.8.0,1.7.1,1.7.0,1.6.1"
+DEFAULT_QGC_VERSION="latest"
 DEFAULT_FOXGLOVE_PORT="8765"
 DEFAULT_FOXGLOVE_ADDRESS="0.0.0.0"
 
@@ -36,6 +37,9 @@ CONFIG_KEYS=(
     GROOT_FALLBACK_VERSIONS
     GROOT_APPIMAGE_URL
     GROOT_SHA256
+    QGC_VERSION
+    QGC_APPIMAGE_URL
+    QGC_SHA256
     FOXGLOVE_PORT
     FOXGLOVE_ADDRESS
 )
@@ -62,7 +66,7 @@ set_runtime_var() {
     local key="$1"
     local value="$2"
     case "${key}" in
-        ROS_DISTRO|ROS_INSTALL_TYPE|ROS_DOMAIN_ID|PROJECT_NAME|INSTALL_MICRO_ROS|LAUNCH_COMMAND|IMAGE_NAME|IMAGE_STRATEGY|GROOT_VERSION|GROOT_FALLBACK_VERSIONS|GROOT_APPIMAGE_URL|GROOT_SHA256|FOXGLOVE_PORT|FOXGLOVE_ADDRESS)
+        ROS_DISTRO|ROS_INSTALL_TYPE|ROS_DOMAIN_ID|PROJECT_NAME|INSTALL_MICRO_ROS|LAUNCH_COMMAND|IMAGE_NAME|IMAGE_STRATEGY|GROOT_VERSION|GROOT_FALLBACK_VERSIONS|GROOT_APPIMAGE_URL|GROOT_SHA256|QGC_VERSION|QGC_APPIMAGE_URL|QGC_SHA256|FOXGLOVE_PORT|FOXGLOVE_ADDRESS)
             printf -v "${key}" '%s' "${value}"
             ;;
         *)
@@ -122,6 +126,9 @@ GROOT_VERSION="${GROOT_VERSION:-${DEFAULT_GROOT_VERSION}}"
 GROOT_FALLBACK_VERSIONS="${GROOT_FALLBACK_VERSIONS:-${DEFAULT_GROOT_FALLBACK_VERSIONS}}"
 GROOT_APPIMAGE_URL="${GROOT_APPIMAGE_URL:-}"
 GROOT_SHA256="${GROOT_SHA256:-}"
+QGC_VERSION="${QGC_VERSION:-${DEFAULT_QGC_VERSION}}"
+QGC_APPIMAGE_URL="${QGC_APPIMAGE_URL:-}"
+QGC_SHA256="${QGC_SHA256:-}"
 FOXGLOVE_PORT="${FOXGLOVE_PORT:-${DEFAULT_FOXGLOVE_PORT}}"
 FOXGLOVE_ADDRESS="${FOXGLOVE_ADDRESS:-${DEFAULT_FOXGLOVE_ADDRESS}}"
 AUTO_BUILD="false"
@@ -164,6 +171,8 @@ print_usage() {
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "build" "${C_RESET}" "${C_MUTED}" "Build the ROS workspace" "${C_RESET}"
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "run" "${C_RESET}" "${C_MUTED}" "Run the main program" "${C_RESET}"
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "bridge" "${C_RESET}" "${C_MUTED}" "Run Foxglove Bridge" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "rviz" "${C_RESET}" "${C_MUTED}" "Launch RViz2" "${C_RESET}"
+    printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "gazebo" "${C_RESET}" "${C_MUTED}" "Launch Gazebo" "${C_RESET}"
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "enter" "${C_RESET}" "${C_MUTED}" "Enter the container" "${C_RESET}"
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "close" "${C_RESET}" "${C_MUTED}" "Stop the container" "${C_RESET}"
     printf "  %b%-16s%b %b%s%b\n" "${C_CMD}" "--command <cmd>" "${C_RESET}" "${C_MUTED}" "Run a custom command" "${C_RESET}"
@@ -178,7 +187,7 @@ print_usage() {
 
     printf "%bExamples%b\n" "${C_SECTION}" "${C_RESET}"
     printf "  %b%s%b\n" "${C_CMD}" "./ROS2X app groot" "${C_RESET}"
-    printf "  %b%s%b\n" "${C_CMD}" "./ROS2X config set ROS_DOMAIN_ID 12" "${C_RESET}"
+        printf "  %b%s%b\n" "${C_CMD}" "./ROS2X config set ROS_DOMAIN_ID 12" "${C_RESET}"
     printf "  %b%s%b\n" "${C_CMD}" "./ROS2X --command \"ros2 launch my_pkg my_launch.py\"" "${C_RESET}"
     printf "%b----------------------------------------%b\n" "${C_MUTED}" "${C_RESET}"
 }
@@ -197,6 +206,7 @@ show_config() {
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Foxglove Port" "${C_RESET}" "${C_VALUE}" "${FOXGLOVE_PORT}" "${C_RESET}"
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Foxglove Address" "${C_RESET}" "${C_VALUE}" "${FOXGLOVE_ADDRESS}" "${C_RESET}"
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Groot Version" "${C_RESET}" "${C_VALUE}" "${GROOT_VERSION}" "${C_RESET}"
+    printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "QGC Version" "${C_RESET}" "${C_VALUE}" "${QGC_VERSION}" "${C_RESET}"
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Config File" "${C_RESET}" "${C_VALUE}" "${CONFIG_FILE}" "${C_RESET}"
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "User ID" "${C_RESET}" "${C_VALUE}" "$(id -u)" "${C_RESET}"
     printf "  %b%-18s%b %b%s%b\n" "${C_LABEL}" "Group ID" "${C_RESET}" "${C_VALUE}" "$(id -g)" "${C_RESET}"
@@ -231,6 +241,9 @@ GROOT_VERSION=${DEFAULT_GROOT_VERSION}
 GROOT_FALLBACK_VERSIONS=${DEFAULT_GROOT_FALLBACK_VERSIONS}
 GROOT_APPIMAGE_URL=
 GROOT_SHA256=
+QGC_VERSION=${DEFAULT_QGC_VERSION}
+QGC_APPIMAGE_URL=
+QGC_SHA256=
 FOXGLOVE_PORT=${DEFAULT_FOXGLOVE_PORT}
 FOXGLOVE_ADDRESS=${DEFAULT_FOXGLOVE_ADDRESS}
 EOF
@@ -352,6 +365,10 @@ print_config_key_options() {
         FOXGLOVE_ADDRESS)
             echo "  - IP/host bind address (recommended default: 0.0.0.0)"
             ;;
+        QGC_VERSION)
+            echo "  - latest"
+            echo "  - specific version like 5.0.8 (or v5.0.8)"
+            ;;
         *)
             echo "  - (free text)"
             ;;
@@ -382,6 +399,12 @@ print_config_key_hint() {
             ;;
         FOXGLOVE_ADDRESS)
             echo "  ./ROS2X config set FOXGLOVE_ADDRESS 0.0.0.0"
+            ;;
+        QGC_VERSION)
+            echo "  ./ROS2X config set QGC_VERSION latest"
+            ;;
+        QGC_APPIMAGE_URL)
+            echo "  ./ROS2X config set QGC_APPIMAGE_URL https://example.com/QGroundControl-x86_64.AppImage"
             ;;
         *)
             echo "  ./ROS2X config set ${key} <VALUE>"
@@ -443,6 +466,18 @@ validate_config_value() {
         FOXGLOVE_ADDRESS)
             if [[ -z "${value}" ]]; then
                 echo "Error: FOXGLOVE_ADDRESS cannot be empty"
+                return 1
+            fi
+            ;;
+        QGC_VERSION)
+            if [[ -z "${value}" ]]; then
+                echo "Error: QGC_VERSION cannot be empty (use latest or a concrete version)"
+                return 1
+            fi
+            ;;
+        QGC_APPIMAGE_URL)
+            if [[ -n "${value}" ]] && [[ ! "${value}" =~ ^https?:// ]]; then
+                echo "Error: QGC_APPIMAGE_URL must be an absolute http(s) URL"
                 return 1
             fi
             ;;
@@ -617,6 +652,7 @@ compose_up_with_strategy() {
 list_apps() {
     echo "Available apps:"
     echo "  - groot"
+    echo "  - qgroundcontrol (alias: qgc)"
 }
 
 launch_groot() {
@@ -637,11 +673,64 @@ launch_groot() {
             echo "Error: Groot AppImage is not executable: ${app}" >&2
             exit 1
         fi
+
+        mkdir -p "/home/ros/ROS2X/apps/groot/config" "/home/ros/ROS2X/apps/groot/data"
+        export XDG_CONFIG_HOME="/home/ros/ROS2X/apps/groot/config"
+        export XDG_DATA_HOME="/home/ros/ROS2X/apps/groot/data"
+        export QT_X11_NO_MITSHM=1
+
         exec "${app}"
     '
     app_status=$?
     set -e
     echo "Groot process exited. Container remains running for other tasks."
+    echo "Use './ROS2X close' to stop and remove the container."
+    return "${app_status}"
+}
+
+launch_qgroundcontrol() {
+    echo "Launching QGroundControl..."
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
+    fi
+
+    set +e
+    compose exec --user ros \
+        -e ROS2X_QGC_VERSION="${QGC_VERSION}" \
+        -e ROS2X_QGC_APPIMAGE_URL="${QGC_APPIMAGE_URL}" \
+        -e ROS2X_QGC_SHA256="${QGC_SHA256}" \
+        ${SERVICE_NAME} bash -lc '
+            set -e
+            app="/home/ros/ROS2X/apps/qgroundcontrol/qgroundcontrol.AppImage"
+
+            if [ ! -x "${app}" ]; then
+                QGC_VERSION="${ROS2X_QGC_VERSION}" \
+                QGC_APPIMAGE_URL="${ROS2X_QGC_APPIMAGE_URL}" \
+                QGC_SHA256="${ROS2X_QGC_SHA256}" \
+                    bash "/home/ros/ROS2X/scripts/install_qgroundcontrol.sh"
+            fi
+
+            if [ ! -x "${app}" ]; then
+                echo "Error: QGroundControl AppImage is not executable: ${app}" >&2
+                exit 1
+            fi
+
+            mkdir -p "/home/ros/ROS2X/apps/qgroundcontrol/config" "/home/ros/ROS2X/apps/qgroundcontrol/data"
+            export XDG_CONFIG_HOME="/home/ros/ROS2X/apps/qgroundcontrol/config"
+            export XDG_DATA_HOME="/home/ros/ROS2X/apps/qgroundcontrol/data"
+            export QT_X11_NO_MITSHM=1
+
+            # Fallback when /dev/fuse is unavailable in restricted environments.
+            if [ ! -e /dev/fuse ]; then
+                export APPIMAGE_EXTRACT_AND_RUN=1
+            fi
+
+            exec "${app}"
+        '
+    app_status=$?
+    set -e
+    echo "QGroundControl exited. Container remains running for other tasks."
     echo "Use './ROS2X close' to stop and remove the container."
     return "${app_status}"
 }
@@ -662,6 +751,9 @@ launch_app() {
     case "${app_name}" in
         groot)
             launch_groot
+            ;;
+        qgroundcontrol|qgc)
+            launch_qgroundcontrol
             ;;
         *)
             echo "Error: Unknown app '${app_name}'."
@@ -708,9 +800,93 @@ launch_foxglove_bridge() {
     return "${bridge_status}"
 }
 
+launch_rviz() {
+    echo "Launching RViz2..."
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
+    fi
+
+    set +e
+    compose exec --user ros ${SERVICE_NAME} bash -lc '
+        set -e
+        set +u
+        source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+        if [ -f "/home/ros/ROS2X/ros2_ws/install/setup.bash" ]; then
+            source "/home/ros/ROS2X/ros2_ws/install/setup.bash"
+        fi
+        set -u
+
+        if ! command -v rviz2 >/dev/null 2>&1; then
+            echo "Error: rviz2 executable not found." >&2
+            echo "Hint: rebuild image or install package ros-${ROS_DISTRO:-humble}-rviz2." >&2
+            exit 1
+        fi
+
+        exec rviz2
+    '
+    rviz_status=$?
+    set -e
+    echo "RViz2 exited. Container remains running for other tasks."
+    echo "Use './ROS2X close' to stop and remove the container."
+    return "${rviz_status}"
+}
+
+launch_gazebo() {
+    echo "Launching Gazebo..."
+    if ! container_running; then
+        echo "Container '${PROJECT_NAME}' is not running. Starting it..."
+        compose_up_with_strategy true
+    fi
+
+    set +e
+    compose exec --user ros ${SERVICE_NAME} bash -lc '
+        set -e
+        set +u
+        source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+        if [ -f "/home/ros/ROS2X/ros2_ws/install/setup.bash" ]; then
+            source "/home/ros/ROS2X/ros2_ws/install/setup.bash"
+        fi
+        set -u
+
+        mkdir -p "/home/ros/ROS2X/apps/gazebo/config" "/home/ros/ROS2X/apps/gazebo/data"
+        if [ -d "/home/ros/.gz" ] && [ ! -L "/home/ros/.gz" ]; then
+            rm -rf "/home/ros/ROS2X/apps/gazebo/config/.gz"
+            mv "/home/ros/.gz" "/home/ros/ROS2X/apps/gazebo/config/.gz"
+        fi
+        if [ -d "/home/ros/.ignition" ] && [ ! -L "/home/ros/.ignition" ]; then
+            rm -rf "/home/ros/ROS2X/apps/gazebo/config/.ignition"
+            mv "/home/ros/.ignition" "/home/ros/ROS2X/apps/gazebo/config/.ignition"
+        fi
+        ln -sfn "/home/ros/ROS2X/apps/gazebo/config/.gz" "/home/ros/.gz"
+        ln -sfn "/home/ros/ROS2X/apps/gazebo/config/.ignition" "/home/ros/.ignition"
+        mkdir -p "/home/ros/ROS2X/apps/gazebo/config/.gz" "/home/ros/ROS2X/apps/gazebo/config/.ignition"
+        export XDG_CONFIG_HOME="/home/ros/ROS2X/apps/gazebo/config/xdg"
+        export XDG_DATA_HOME="/home/ros/ROS2X/apps/gazebo/data/xdg"
+        mkdir -p "${XDG_CONFIG_HOME}" "${XDG_DATA_HOME}"
+
+        if ros2 pkg prefix ros_gz_sim >/dev/null 2>&1; then
+            exec ros2 launch ros_gz_sim gz_sim.launch.py
+        fi
+
+        if command -v gz >/dev/null 2>&1; then
+            exec gz sim
+        fi
+
+        echo "Error: Gazebo executable not found." >&2
+        echo "Hint: rebuild image or install ros-${ROS_DISTRO:-humble}-ros-gz and ros-${ROS_DISTRO:-humble}-ros-gz-sim." >&2
+        exit 1
+    '
+    gazebo_status=$?
+    set -e
+    echo "Gazebo exited. Container remains running for other tasks."
+    echo "Use './ROS2X close' to stop and remove the container."
+    return "${gazebo_status}"
+}
+
 open_xhost_if_needed() {
     case "${ACTION}" in
-        build|run|app|enter|--command)
+        build|run|app|bridge|rviz|gazebo|enter|--command)
             if command -v xhost >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
                 xhost +local: >/dev/null 2>&1 || true
                 XHOST_OPENED="true"
@@ -761,6 +937,9 @@ GROOT_VERSION=${GROOT_VERSION}
 GROOT_FALLBACK_VERSIONS=${GROOT_FALLBACK_VERSIONS}
 GROOT_APPIMAGE_URL=${GROOT_APPIMAGE_URL}
 GROOT_SHA256=${GROOT_SHA256}
+QGC_VERSION=${QGC_VERSION}
+QGC_APPIMAGE_URL=${QGC_APPIMAGE_URL}
+QGC_SHA256=${QGC_SHA256}
 FOXGLOVE_PORT=${FOXGLOVE_PORT}
 FOXGLOVE_ADDRESS=${FOXGLOVE_ADDRESS}
 
@@ -800,7 +979,7 @@ case "${ACTION}" in
         AUTO_BUILD="false"
         AUTO_RUN="true"
         ;;
-    bridge|app|enter|close|--command)
+    bridge|rviz|gazebo|app|enter|close|--command)
         AUTO_BUILD="false"
         AUTO_RUN="false"
         ;;
@@ -849,6 +1028,12 @@ case "${ACTION}" in
         ;;
     bridge)
         launch_foxglove_bridge
+        ;;
+    rviz)
+        launch_rviz
+        ;;
+    gazebo)
+        launch_gazebo
         ;;
     app)
         launch_app "${ACTION_ARGS[0]:-}"

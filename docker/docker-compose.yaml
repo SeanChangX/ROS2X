@@ -38,8 +38,12 @@ services:
       - GROOT_FALLBACK_VERSIONS=${GROOT_FALLBACK_VERSIONS:-1.8.1,1.8.0,1.7.1,1.7.0,1.6.1}
       - GROOT_APPIMAGE_URL=${GROOT_APPIMAGE_URL:-}
       - GROOT_SHA256=${GROOT_SHA256:-}
+      - QGC_VERSION=${QGC_VERSION:-latest}
+      - QGC_APPIMAGE_URL=${QGC_APPIMAGE_URL:-}
+      - QGC_SHA256=${QGC_SHA256:-}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - QT_X11_NO_MITSHM=1
     
     volumes:
       # Mount app resources into container.

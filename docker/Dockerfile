@@ -52,6 +52,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     libfuse2 \
     fuse3 \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
+    gstreamer1.0-gl \
+    libqt5gui5 \
     && locale-gen en_US en_US.UTF-8 \
     && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
@@ -59,11 +63,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create non-root user (UID/GID will still be remapped by entrypoint at runtime).
 RUN groupadd --gid ${USER_GID} ${USERNAME} \
     && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} \
+    && usermod -a -G dialout ${USERNAME} \
     && echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
     && chmod 0440 /etc/sudoers.d/${USERNAME}
 
+# Remove modemmanager to avoid serial-port conflicts for QGroundControl.
+RUN apt-get update \
+    && (apt-get remove -y modemmanager || true) \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install ROS using the repo script (works in Docker build and native host use cases).
-COPY scripts/install_ros2_humble.sh /tmp/install_ros2.sh
+COPY scripts/install_ros2.sh /tmp/install_ros2.sh
 RUN chmod +x /tmp/install_ros2.sh \
     && ROS_DISTRO=${ROS_DISTRO} INSTALL_TYPE=${ROS_INSTALL_TYPE} NON_INTERACTIVE=true CONFIGURE_BASHRC=no ALLOW_ROOT=true SKIP_UPGRADE=true NO_INSTALL_RECOMMENDS=true \
        /tmp/install_ros2.sh \
@@ -81,7 +91,12 @@ RUN apt-get update \
     && for pkg in \
         "ros-${ROS_DISTRO}-rmw-cyclonedds-cpp" \
         "ros-${ROS_DISTRO}-foxglove-bridge" \
+        "ros-${ROS_DISTRO}-rosbridge-server" \
         "ros-${ROS_DISTRO}-ament-cmake" \
+        "ros-${ROS_DISTRO}-rviz2" \
+        "ros-${ROS_DISTRO}-ros-gz" \
+        "ros-${ROS_DISTRO}-ros-gz-sim" \
+        "ros-${ROS_DISTRO}-ros-gz-bridge" \
         "ros-${ROS_DISTRO}-rqt-plot" \
         "ros-${ROS_DISTRO}-rqt-tf-tree" \
         "ros-${ROS_DISTRO}-nav2-msgs" \
